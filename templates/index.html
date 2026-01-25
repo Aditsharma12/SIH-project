@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BioScan: Plant Health Monitor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-dark: #0f1115;
+            --panel-bg: rgba(30, 35, 45, 0.6);
+            --border: rgba(255, 255, 255, 0.1);
+            --accent: #00f2ff;
+            --success: #00e676;
+            --danger: #ff1744;
+            --warning: #ffb700;
+            --text-main: #ffffff;
+            --text-muted: #8b9bb4;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            background-color: var(--bg-dark);
+            background-image: radial-gradient(circle at 50% 0%, #1a2333 0%, #0f1115 100%);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 95%;
+            max-width: 1400px;
+            margin: 40px auto;
+        }
+
+        /* --- HEADER --- */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .logo-icon {
+            color: var(--accent);
+            font-size: 28px;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-muted);
+            background: rgba(255,255,255,0.05);
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--success);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; box-shadow: 0 0 0px var(--success); }
+            50% { opacity: 0.5; box-shadow: 0 0 10px var(--success); }
+            100% { opacity: 1; box-shadow: 0 0 0px var(--success); }
+        }
+
+        /* --- DASHBOARD GRID --- */
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 25px;
+            align-items: start;
+        }
+
+        /* --- VIDEO FEED --- */
+        .video-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 10px;
+            position: relative;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+            backdrop-filter: blur(10px);
+        }
+
+        /* Viewfinder Decorations */
+        .viewfinder-corner {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border-color: var(--accent);
+            border-style: solid;
+            border-width: 0;
+            z-index: 10;
+            opacity: 0.7;
+        }
+        .tl { top: 20px; left: 20px; border-top-width: 2px; border-left-width: 2px; }
+        .tr { top: 20px; right: 20px; border-top-width: 2px; border-right-width: 2px; }
+        .bl { bottom: 20px; left: 20px; border-bottom-width: 2px; border-left-width: 2px; }
+        .br { bottom: 20px; right: 20px; border-bottom-width: 2px; border-right-width: 2px; }
+
+        img {
+            width: 100%;
+            border-radius: 8px;
+            display: block;
+            background: #000;
+        }
+
+        /* --- STATS PANEL --- */
+        .stats-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            height: 100%;
+        }
+
+        .status-header {
+            margin-bottom: 40px;
+        }
+
+        .status-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        #status-text {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--text-main);
+            text-shadow: 0 0 20px rgba(0,0,0,0.5);
+            transition: color 0.3s ease;
+        }
+
+        /* --- METRICS --- */
+        .metric-group {
+            display: flex;
+            flex-direction: column;
+            gap: 25px;
+        }
+
+        .metric {
+            position: relative;
+        }
+
+        .metric-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .metric-val {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent);
+        }
+
+        .progress-track {
+            height: 8px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            border-radius: 4px;
+            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            background-image: linear-gradient(
+                45deg,
+                rgba(255, 255, 255, 0.15) 25%,
+                transparent 25%,
+                transparent 50%,
+                rgba(255, 255, 255, 0.15) 50%,
+                rgba(255, 255, 255, 0.15) 75%,
+                transparent 75%,
+                transparent
+            );
+            background-size: 20px 20px;
+            animation: stripes 1s linear infinite;
+        }
+
+        @keyframes stripes {
+            0% { background-position: 20px 0; }
+            100% { background-position: 0 0; }
+        }
+
+        .bg-success { background-color: var(--success); box-shadow: 0 0 15px rgba(0, 230, 118, 0.3); }
+        .bg-danger { background-color: var(--danger); box-shadow: 0 0 15px rgba(255, 23, 68, 0.3); }
+        .bg-info { background-color: var(--accent); box-shadow: 0 0 15px rgba(0, 242, 255, 0.3); }
+
+        /* --- FOOTER INFO --- */
+        .info-box {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        .info-tag {
+            display: inline-block;
+            margin-top: 8px;
+            padding: 4px 8px;
+            background: rgba(0, 242, 255, 0.1);
+            border: 1px solid rgba(0, 242, 255, 0.2);
+            color: var(--accent);
+            border-radius: 4px;
+        }
+
+        /* --- RESPONSIVE --- */
+        @media (max-width: 1024px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+            .stats-card {
+                padding: 20px;
+            }
+            #status-text {
+                font-size: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        
+        <header class="header">
+            <h1><span class="logo-icon">❖</span> BioScan AI</h1>
+            <div class="connection-status">
+                <div class="pulse-dot"></div>
+                SYSTEM ONLINE
+            </div>
+        </header>
+
+        <div class="dashboard">
+            
+            <div class="video-card">
+                <div class="viewfinder-corner tl"></div>
+                <div class="viewfinder-corner tr"></div>
+                <div class="viewfinder-corner bl"></div>
+                <div class="viewfinder-corner br"></div>
+                <img src="{{ url_for('video_feed') }}" alt="Live Feed">
+            </div>
+
+            <aside class="stats-card">
+                <div class="status-header">
+                    <div class="status-label">Diagnostic Result</div>
+                    <div id="status-text">INITIALIZING...</div>
+                </div>
+
+                <div class="metric-group">
+                    <div class="metric">
+                        <div class="metric-header">
+                            <span>Plant Health</span>
+                            <span class="metric-val" id="val-health">0%</span>
+                        </div>
+                        <div class="progress-track">
+                            <div id="bar-health" class="progress-fill bg-success"></div>
+                        </div>
+                    </div>
+
+                    <div class="metric">
+                        <div class="metric-header">
+                            <span>Tissue Damage</span>
+                            <span class="metric-val" id="val-damage">0%</span>
+                        </div>
+                        <div class="progress-track">
+                            <div id="bar-damage" class="progress-fill bg-danger"></div>
+                        </div>
+                    </div>
+
+                    <div class="metric">
+                        <div class="metric-header">
+                            <span>Surface Coverage</span>
+                            <span class="metric-val" id="val-coverage">0%</span>
+                        </div>
+                        <div class="progress-track">
+                            <div id="bar-coverage" class="progress-fill bg-info"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="info-box">
+                    <p>Real-time tensor mesh analysis active. System analyzes leaf colorimetry and surface area to calculate damage probability.</p>
+                    <span class="info-tag">Latency: &lt;100ms</span>
+                    <span class="info-tag">Tensor: Active</span>
+                </div>
+            </aside>
+
+        </div>
+    </div>
+
+    <script>
+        // Connect to SSE Stream
+        const eventSource = new EventSource("/stats_feed");
+
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            
+            // Update Status Text & Color
+            const statusElem = document.getElementById("status-text");
+            statusElem.innerText = data.status;
+
+            if (data.status === "HEALTHY") statusElem.style.color = "#00e676";
+            else if (data.status === "DAMAGED") statusElem.style.color = "#ff1744";
+            else if (data.status === "MODERATE") statusElem.style.color = "#ffb700";
+            else statusElem.style.color = "#ffffff";
+
+            // Helper to update bars
+            const updateMetric = (id, value) => {
+                document.getElementById(`val-${id}`).innerText = value + "%";
+                document.getElementById(`bar-${id}`).style.width = value + "%";
+            };
+
+            updateMetric("health", data.health);
+            updateMetric("damage", data.damage);
+            updateMetric("coverage", data.coverage);
+        };
+
+        // Handle Connection Errors
+        eventSource.onerror = function() {
+            document.querySelector('.connection-status').innerHTML = '<span style="color:#ff1744;">●</span> DISCONNECTED';
+            document.querySelector('.connection-status').style.borderColor = '#ff1744';
+        };
+    </script>
+</body>
+</html>
