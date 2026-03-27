@@ -361,9 +361,9 @@
             document.querySelector('.connection-status').style.borderColor = '#ff1744';
         };
 
-        // Client camera upload for Render local browser capture
+        const videoCard = document.querySelector('.video-card');
         const startBtn = document.createElement('button');
-        startBtn.textContent = 'Start Webcam Mode';
+        startBtn.textContent = 'Start Camera Analysis';
         startBtn.style.margin = '10px 20px';
         startBtn.style.padding = '8px 14px';
         startBtn.style.borderRadius = '6px';
@@ -371,76 +371,132 @@
         startBtn.style.color = '#0d1020';
         startBtn.style.border = 'none';
         startBtn.style.cursor = 'pointer';
-
-        const videoCard = document.querySelector('.video-card');
+        startBtn.style.display = 'none';
         videoCard.insertBefore(startBtn, videoCard.firstChild);
 
-        const localVideo = document.createElement('video');
-        localVideo.id = 'local-video';
-        localVideo.style.display = 'block';
-        localVideo.style.width = '100%';
-        localVideo.style.maxHeight = '400px';
-        localVideo.autoplay = true;
-        localVideo.muted = true;
-        localVideo.playsInline = true;
-        videoCard.appendChild(localVideo);
+        const cameraNote = document.createElement('div');
+        cameraNote.style.margin = '10px 20px';
+        cameraNote.style.fontSize = '12px';
+        cameraNote.style.color = '#8b9bb4';
+        videoCard.insertBefore(cameraNote, startBtn.nextSibling);
+
+        const captureVideo = document.createElement('video');
+        captureVideo.autoplay = true;
+        captureVideo.muted = true;
+        captureVideo.playsInline = true;
 
         const canvas = document.createElement('canvas');
-
         let streamInterval = null;
+        const uploadQuality = 0.88;
+        const maxUploadWidth = 960;
 
-        async function startLocalCamera() {
+        function getReadableCameraError(err) {
+            if (!err || !err.name) return 'Unknown camera error.';
+            if (err.name === 'NotAllowedError') return 'Camera permission denied. Please allow camera access in browser settings.';
+            if (err.name === 'NotFoundError') return 'No camera device found on this system.';
+            if (err.name === 'NotReadableError') return 'Camera is busy in another app.';
+            if (err.name === 'OverconstrainedError') return 'Requested camera constraints are not supported.';
+            return `${err.name}: ${err.message || 'Camera access failed.'}`;
+        }
+
+        async function fetchRuntimeInfo() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                localVideo.srcObject = stream;
-                console.log('Webcam stream started', stream);
-
-                localVideo.addEventListener('loadedmetadata', () => {
-                    canvas.width = localVideo.videoWidth || 640;
-                    canvas.height = localVideo.videoHeight || 480;
-
-                    let isUploading = false;
-                    
-                    if (streamInterval) clearInterval(streamInterval);
-                    streamInterval = setInterval(async () => {
-                        if (isUploading) return;
-                        isUploading = true;
-
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(localVideo, 0, 0, canvas.width, canvas.height);
-                        const dataURL = canvas.toDataURL('image/jpeg', 0.6);
-
-                        try {
-                            const resp = await fetch('/api/upload_frame', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ image: dataURL })
-                            });
-                            if (!resp.ok) {
-                                console.warn('Upload frame failed', resp.status);
-                            } else {
-                                const json = await resp.json();
-                                if (json && json.stats) {
-                                    updateUIStatus(json.stats);
-                                }
-                            }
-                        } catch (err) {
-                            console.warn('Upload error', err);
-                        } finally {
-                            isUploading = false;
-                        }
-                    }, 100);
-                });
-
-                startBtn.disabled = true;
-                startBtn.textContent = 'Webcam Streaming…';
+                const response = await fetch('/api/runtime_info', { cache: 'no-store' });
+                if (!response.ok) return null;
+                return await response.json();
             } catch (err) {
-                console.error('Webcam not available', err);
-                alert('Webcam not available or access denied. Please allow camera permissions and retry.');
+                console.warn('runtime_info fetch failed', err);
+                return null;
             }
         }
 
-        startBtn.addEventListener('click', startLocalCamera);
+        async function startLocalCamera() {
+            startBtn.disabled = true;
+            startBtn.textContent = 'Requesting Camera...';
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                captureVideo.srcObject = stream;
+                await captureVideo.play();
+
+                await new Promise((resolve) => {
+                    if (captureVideo.readyState >= 1) {
+                        resolve();
+                    } else {
+                        captureVideo.onloadedmetadata = () => resolve();
+                    }
+                });
+
+                const sourceWidth = captureVideo.videoWidth || 640;
+                const sourceHeight = captureVideo.videoHeight || 480;
+                const scale = sourceWidth > maxUploadWidth ? maxUploadWidth / sourceWidth : 1;
+                canvas.width = Math.round(sourceWidth * scale);
+                canvas.height = Math.round(sourceHeight * scale);
+
+                let isUploading = false;
+                if (streamInterval) clearInterval(streamInterval);
+
+                streamInterval = setInterval(async () => {
+                    if (isUploading) return;
+                    isUploading = true;
+
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(captureVideo, 0, 0, canvas.width, canvas.height);
+                    const dataURL = canvas.toDataURL('image/jpeg', uploadQuality);
+
+                    try {
+                        const resp = await fetch('/api/upload_frame', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ image: dataURL })
+                        });
+                        if (resp.ok) {
+                            const json = await resp.json();
+                            if (json && json.stats) {
+                                updateUIStatus(json.stats);
+                            }
+                        } else {
+                            console.warn('Upload frame failed', resp.status);
+                        }
+                    } catch (err) {
+                        console.warn('Upload error', err);
+                    } finally {
+                        isUploading = false;
+                    }
+                }, 100);
+
+                startBtn.textContent = 'Analysis Running';
+                cameraNote.textContent = 'Main feed now shows processed plant analysis output.';
+            } catch (err) {
+                const message = getReadableCameraError(err);
+                console.error('Webcam startup error', err);
+                cameraNote.textContent = message;
+                alert(message);
+                startBtn.disabled = false;
+                startBtn.textContent = 'Start Camera Analysis';
+            }
+        }
+
+        async function setupCameraControls() {
+            const runtime = await fetchRuntimeInfo();
+            if (!runtime) {
+                startBtn.style.display = 'inline-block';
+                cameraNote.textContent = 'Main panel is processed analysis feed. Click start to begin camera upload.';
+                startBtn.addEventListener('click', startLocalCamera);
+                return;
+            }
+
+            if (runtime.client_camera_enabled) {
+                startBtn.style.display = 'inline-block';
+                cameraNote.textContent = 'Main panel is processed analysis feed. Click start to begin camera upload.';
+                startBtn.addEventListener('click', startLocalCamera);
+                return;
+            }
+
+            cameraNote.textContent = 'Client camera mode is disabled on the server.';
+        }
+
+        setupCameraControls();
     </script>
 </body>
 </html>

@@ -10,10 +10,9 @@ from threading import Lock
 app = Flask(__name__)
 
 # --- CONFIGURATION ---
-CAMERA_INDEX = 0
-CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", str(CAMERA_INDEX))
-BACKEND = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
 ENABLE_CLIENT_CAMERA = os.getenv("CLIENT_CAMERA", "true").lower() in ("1", "true", "yes")
+MAX_FRAME_WIDTH = int(os.getenv("MAX_FRAME_WIDTH", "960"))
+OUTPUT_JPEG_QUALITY = int(os.getenv("OUTPUT_JPEG_QUALITY", "90"))
 
 # Global storage for real-time stats
 # This allows the video loop to "talk" to the data stream
@@ -24,9 +23,29 @@ global_stats = {
     "status": "Waiting for Plant..."
 }
 
-latest_user_frame = None
-latest_user_frame_id = 0
-latest_user_frame_lock = Lock()
+latest_processed_frame_bytes = None
+latest_processed_frame_lock = Lock()
+
+
+def encode_jpeg(frame):
+    jpeg_quality = max(40, min(100, OUTPUT_JPEG_QUALITY))
+    ok, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+    if not ok:
+        raise ValueError("Failed to encode frame")
+    return buffer.tobytes()
+
+
+def resize_for_processing(frame):
+    if MAX_FRAME_WIDTH <= 0:
+        return frame
+
+    h, w = frame.shape[:2]
+    if w <= MAX_FRAME_WIDTH:
+        return frame
+
+    scale = MAX_FRAME_WIDTH / float(w)
+    resized_h = max(1, int(h * scale))
+    return cv2.resize(frame, (MAX_FRAME_WIDTH, resized_h), interpolation=cv2.INTER_AREA)
 
 def create_leaf_mask(frame):
     h, w = frame.shape[:2]
@@ -133,13 +152,15 @@ def annotate_frame(frame):
         cv2.rectangle(frame, (x, y), (x + w_bbox, y + h_bbox), box_color, 2)
         draw_symmetric_tensor_mesh(frame, bbox, leaf_mask, damage_ratio)
 
-    ret, buffer = cv2.imencode('.jpg', frame)
-    return buffer.tobytes()
+    return frame
 
 
 @app.route('/api/upload_frame', methods=['POST'])
 def upload_frame():
-    global latest_user_frame, latest_user_frame_id, global_stats
+    global latest_processed_frame_bytes, global_stats
+
+    if not ENABLE_CLIENT_CAMERA:
+        return jsonify({'error': 'Client camera is disabled on server'}), 400
 
     data = request.get_json(force=True)
     image_data = data.get('image') if isinstance(data, dict) else None
@@ -156,70 +177,41 @@ def upload_frame():
         frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         if frame is None:
             raise ValueError('Unable to decode image')
+
+        frame = resize_for_processing(frame)
+        annotated_frame = annotate_frame(frame)
+        processed_frame_bytes = encode_jpeg(annotated_frame)
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
-    with latest_user_frame_lock:
-        latest_user_frame = frame
-        latest_user_frame_id += 1
+    with latest_processed_frame_lock:
+        latest_processed_frame_bytes = processed_frame_bytes
 
     print(f"INFO: upload_frame accepted, frame shape={frame.shape}")
     return jsonify({'status': 'ok', 'stats': global_stats})
 
 
 def generate_frames():
-    global global_stats, latest_user_frame
-    use_camera = os.getenv("USE_CAMERA", "true").lower() in ("1", "true", "yes")
-
-    camera = None
-    if use_camera:
-        source = os.getenv("CAMERA_SOURCE", CAMERA_SOURCE)
-        print(f"DEBUG: Opening camera source {source}...")
-
-        if source.isdigit():
-            camera = cv2.VideoCapture(int(source), BACKEND)
-        else:
-            camera = cv2.VideoCapture(source)
-
-        time.sleep(1)
-
-        if not camera.isOpened():
-            print("WARNING: Camera source could not open. Falling back to alternative mode.")
-            camera.release()
-            camera = None
-
-    last_processed_id = -1
-    last_frame_bytes = None
+    global global_stats, latest_processed_frame_bytes
+    waiting_frame_bytes = None
 
     while True:
-        if camera is not None:
-            success, frame = camera.read()
-            if not success:
-                break
-            frame = cv2.GaussianBlur(frame, (5, 5), 0)
-            frame_bytes = annotate_frame(frame)
-        elif ENABLE_CLIENT_CAMERA:
-            with latest_user_frame_lock:
-                current_frame_ref = latest_user_frame
-                current_id = latest_user_frame_id
+        if ENABLE_CLIENT_CAMERA:
+            with latest_processed_frame_lock:
+                current_frame_bytes = latest_processed_frame_bytes
 
-            if current_frame_ref is None:
-                if last_frame_bytes is None:
+            if current_frame_bytes is None:
+                if waiting_frame_bytes is None:
                     global_stats["status"] = "WAITING"
                     global_stats["health"] = 0
                     global_stats["damage"] = 0
                     global_stats["coverage"] = 0
                     frame = np.zeros((480, 640, 3), dtype=np.uint8)
                     cv2.putText(frame, "Awaiting browser camera...", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-                    last_frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
-                frame_bytes = last_frame_bytes
+                    waiting_frame_bytes = encode_jpeg(frame)
+                frame_bytes = waiting_frame_bytes
             else:
-                if current_id != last_processed_id:
-                    frame = current_frame_ref.copy()
-                    frame = cv2.GaussianBlur(frame, (5, 5), 0)
-                    last_frame_bytes = annotate_frame(frame)
-                    last_processed_id = current_id
-                frame_bytes = last_frame_bytes
+                frame_bytes = current_frame_bytes
         else:
             global_stats["status"] = "NO_CAMERA"
             global_stats["health"] = 0
@@ -227,15 +219,12 @@ def generate_frames():
             global_stats["coverage"] = 0
             frame = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(frame, "No Camera: Render cloud mode", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-            frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
+            frame_bytes = encode_jpeg(frame)
 
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
         time.sleep(0.05)
-
-    if camera is not None:
-        camera.release()
 
 def generate_data():
     """Stream JSON data to the client"""
@@ -256,6 +245,15 @@ def video_feed():
 @app.route('/stats_feed')
 def stats_feed():
     return Response(generate_data(), mimetype='text/event-stream')
+
+
+@app.route('/api/runtime_info')
+def runtime_info_api():
+    return jsonify({
+        "mode": "client_camera_processed_stream",
+        "server_camera_active": False,
+        "client_camera_enabled": ENABLE_CLIENT_CAMERA
+    })
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
