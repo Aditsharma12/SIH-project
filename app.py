@@ -186,6 +186,9 @@ def generate_frames():
             camera.release()
             camera = None
 
+    last_processed_id = None
+    last_frame_bytes = None
+
     while True:
         if camera is not None:
             success, frame = camera.read()
@@ -195,19 +198,25 @@ def generate_frames():
             frame_bytes = annotate_frame(frame)
         elif ENABLE_CLIENT_CAMERA:
             with latest_user_frame_lock:
-                frame = latest_user_frame.copy() if latest_user_frame is not None else None
+                current_frame_ref = latest_user_frame
 
-            if frame is None:
-                global_stats["status"] = "WAITING"
-                global_stats["health"] = 0
-                global_stats["damage"] = 0
-                global_stats["coverage"] = 0
-                frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(frame, "Awaiting browser camera...", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-                frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
+            if current_frame_ref is None:
+                if last_frame_bytes is None:
+                    global_stats["status"] = "WAITING"
+                    global_stats["health"] = 0
+                    global_stats["damage"] = 0
+                    global_stats["coverage"] = 0
+                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(frame, "Awaiting browser camera...", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+                    last_frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
+                frame_bytes = last_frame_bytes
             else:
-                frame = cv2.GaussianBlur(frame, (5, 5), 0)
-                frame_bytes = annotate_frame(frame)
+                if id(current_frame_ref) != last_processed_id:
+                    frame = current_frame_ref.copy()
+                    frame = cv2.GaussianBlur(frame, (5, 5), 0)
+                    last_frame_bytes = annotate_frame(frame)
+                    last_processed_id = id(current_frame_ref)
+                frame_bytes = last_frame_bytes
         else:
             global_stats["status"] = "NO_CAMERA"
             global_stats["health"] = 0
