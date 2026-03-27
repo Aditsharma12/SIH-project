@@ -1,8 +1,6 @@
 from flask import Flask, render_template, Response, request, jsonify
 import cv2
 import numpy as np
-import time
-import json
 import os
 import base64
 from threading import Lock
@@ -25,6 +23,8 @@ global_stats = {
 
 latest_processed_frame_bytes = None
 latest_processed_frame_lock = Lock()
+waiting_frame_bytes = None
+waiting_frame_lock = Lock()
 
 
 def encode_jpeg(frame):
@@ -46,6 +46,42 @@ def resize_for_processing(frame):
     scale = MAX_FRAME_WIDTH / float(w)
     resized_h = max(1, int(h * scale))
     return cv2.resize(frame, (MAX_FRAME_WIDTH, resized_h), interpolation=cv2.INTER_AREA)
+
+
+def build_placeholder_frame(text):
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(frame, text, (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+    return frame
+
+
+def get_waiting_frame_bytes():
+    global waiting_frame_bytes, global_stats
+
+    with waiting_frame_lock:
+        if waiting_frame_bytes is None:
+            global_stats["status"] = "WAITING"
+            global_stats["health"] = 0
+            global_stats["damage"] = 0
+            global_stats["coverage"] = 0
+            waiting_frame_bytes = encode_jpeg(build_placeholder_frame("Awaiting browser camera..."))
+        return waiting_frame_bytes
+
+
+def get_latest_frame_bytes():
+    global latest_processed_frame_bytes, global_stats
+
+    if not ENABLE_CLIENT_CAMERA:
+        global_stats["status"] = "NO_CAMERA"
+        global_stats["health"] = 0
+        global_stats["damage"] = 0
+        global_stats["coverage"] = 0
+        return encode_jpeg(build_placeholder_frame("No Camera: Render cloud mode"))
+
+    with latest_processed_frame_lock:
+        if latest_processed_frame_bytes is not None:
+            return latest_processed_frame_bytes
+
+    return get_waiting_frame_bytes()
 
 def create_leaf_mask(frame):
     h, w = frame.shape[:2]
@@ -191,60 +227,36 @@ def upload_frame():
     return jsonify({'status': 'ok', 'stats': global_stats})
 
 
-def generate_frames():
-    global global_stats, latest_processed_frame_bytes
-    waiting_frame_bytes = None
-
-    while True:
-        if ENABLE_CLIENT_CAMERA:
-            with latest_processed_frame_lock:
-                current_frame_bytes = latest_processed_frame_bytes
-
-            if current_frame_bytes is None:
-                if waiting_frame_bytes is None:
-                    global_stats["status"] = "WAITING"
-                    global_stats["health"] = 0
-                    global_stats["damage"] = 0
-                    global_stats["coverage"] = 0
-                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                    cv2.putText(frame, "Awaiting browser camera...", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-                    waiting_frame_bytes = encode_jpeg(frame)
-                frame_bytes = waiting_frame_bytes
-            else:
-                frame_bytes = current_frame_bytes
-        else:
-            global_stats["status"] = "NO_CAMERA"
-            global_stats["health"] = 0
-            global_stats["damage"] = 0
-            global_stats["coverage"] = 0
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(frame, "No Camera: Render cloud mode", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-            frame_bytes = encode_jpeg(frame)
-
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-
-        time.sleep(0.05)
-
-def generate_data():
-    """Stream JSON data to the client"""
-    while True:
-        time.sleep(0.1) # Update every 100ms
-        # Format as Server-Sent Event (SSE)
-        json_data = json.dumps(global_stats)
-        yield f"data: {json_data}\n\n"
-
 @app.route('/')
 def index():
     return render_template('index.html')
 
+
+@app.route('/api/latest_frame')
+def latest_frame():
+    frame_bytes = get_latest_frame_bytes()
+    return Response(
+        frame_bytes,
+        mimetype='image/jpeg',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        }
+    )
+
+
+@app.route('/api/stats')
+def stats_api():
+    return jsonify(global_stats)
+
 @app.route('/video_feed')
 def video_feed():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return latest_frame()
 
 @app.route('/stats_feed')
 def stats_feed():
-    return Response(generate_data(), mimetype='text/event-stream')
+    return stats_api()
 
 
 @app.route('/api/runtime_info')

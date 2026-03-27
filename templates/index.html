@@ -277,7 +277,7 @@
                 <div class="viewfinder-corner tr"></div>
                 <div class="viewfinder-corner bl"></div>
                 <div class="viewfinder-corner br"></div>
-                <img src="{{ url_for('video_feed') }}" alt="Live Feed">
+                <img id="main-feed" src="/api/latest_frame?t=0" alt="Live Feed">
             </div>
 
             <aside class="stats-card">
@@ -349,17 +349,40 @@
             updateMetric("coverage", data.coverage);
         }
 
-        // Connect to SSE Stream
-        const eventSource = new EventSource("/stats_feed");
+        const mainFeed = document.getElementById('main-feed');
+        const connectionStatus = document.querySelector('.connection-status');
 
-        eventSource.onmessage = function(event) {
-            updateUIStatus(JSON.parse(event.data));
-        };
+        function setConnected(connected) {
+            if (connected) {
+                connectionStatus.innerHTML = '<div class="pulse-dot"></div> SYSTEM ONLINE';
+                connectionStatus.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+            } else {
+                connectionStatus.innerHTML = '<span style="color:#ff1744;">●</span> DISCONNECTED';
+                connectionStatus.style.borderColor = '#ff1744';
+            }
+        }
 
-        eventSource.onerror = function() {
-            document.querySelector('.connection-status').innerHTML = '<span style="color:#ff1744;">●</span> DISCONNECTED';
-            document.querySelector('.connection-status').style.borderColor = '#ff1744';
-        };
+        async function refreshFrame() {
+            mainFeed.src = `/api/latest_frame?t=${Date.now()}`;
+        }
+
+        async function pollStats() {
+            try {
+                const resp = await fetch('/api/stats', { cache: 'no-store' });
+                if (!resp.ok) throw new Error(`stats ${resp.status}`);
+                const stats = await resp.json();
+                updateUIStatus(stats);
+                setConnected(true);
+            } catch (err) {
+                console.warn('stats polling error', err);
+                setConnected(false);
+            }
+        }
+
+        setInterval(refreshFrame, 120);
+        setInterval(pollStats, 350);
+        refreshFrame();
+        pollStats();
 
         const videoCard = document.querySelector('.video-card');
         const startBtn = document.createElement('button');
