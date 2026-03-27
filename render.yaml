@@ -9,3 +9,9 @@ services:
     envVars:
       - key: CLIENT_CAMERA
         value: "true"
+      - key: MAX_FRAME_WIDTH
+        value: "512"
+      - key: OUTPUT_JPEG_QUALITY
+        value: "65"
+      - key: ENABLE_TENSOR_MESH
+        value: "false"

@@ -9,8 +9,8 @@ app = Flask(__name__)
 
 # --- CONFIGURATION ---
 ENABLE_CLIENT_CAMERA = os.getenv("CLIENT_CAMERA", "true").lower() in ("1", "true", "yes")
-MAX_FRAME_WIDTH = int(os.getenv("MAX_FRAME_WIDTH", "640"))
-OUTPUT_JPEG_QUALITY = int(os.getenv("OUTPUT_JPEG_QUALITY", "75"))
+MAX_FRAME_WIDTH = int(os.getenv("MAX_FRAME_WIDTH", "512"))
+OUTPUT_JPEG_QUALITY = int(os.getenv("OUTPUT_JPEG_QUALITY", "65"))
 ENABLE_TENSOR_MESH = os.getenv("ENABLE_TENSOR_MESH", "false").lower() in ("1", "true", "yes")
 
 # Global storage for real-time stats
