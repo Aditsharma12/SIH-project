@@ -362,8 +362,38 @@
             }
         }
 
+        const frameIntervalMs = 180;
+        let frameRequestInFlight = false;
+
         async function refreshFrame() {
-            mainFeed.src = `/api/latest_frame?t=${Date.now()}`;
+            if (frameRequestInFlight) return;
+            frameRequestInFlight = true;
+
+            const loaded = await new Promise((resolve) => {
+                const onLoad = () => {
+                    mainFeed.removeEventListener('error', onError);
+                    resolve(true);
+                };
+                const onError = () => {
+                    mainFeed.removeEventListener('load', onLoad);
+                    resolve(false);
+                };
+                mainFeed.addEventListener('load', onLoad, { once: true });
+                mainFeed.addEventListener('error', onError, { once: true });
+                mainFeed.src = `/api/latest_frame?t=${Date.now()}`;
+            });
+
+            setConnected(loaded);
+            frameRequestInFlight = false;
+        }
+
+        async function frameLoop() {
+            while (true) {
+                const start = Date.now();
+                await refreshFrame();
+                const elapsed = Date.now() - start;
+                await new Promise((resolve) => setTimeout(resolve, Math.max(50, frameIntervalMs - elapsed)));
+            }
         }
 
         async function pollStats() {
@@ -372,16 +402,13 @@
                 if (!resp.ok) throw new Error(`stats ${resp.status}`);
                 const stats = await resp.json();
                 updateUIStatus(stats);
-                setConnected(true);
             } catch (err) {
                 console.warn('stats polling error', err);
-                setConnected(false);
             }
         }
 
-        setInterval(refreshFrame, 120);
-        setInterval(pollStats, 350);
-        refreshFrame();
+        frameLoop();
+        setInterval(pollStats, 700);
         pollStats();
 
         const videoCard = document.querySelector('.video-card');
@@ -410,8 +437,8 @@
 
         const canvas = document.createElement('canvas');
         let streamInterval = null;
-        const uploadQuality = 0.88;
-        const maxUploadWidth = 960;
+        const uploadQuality = 0.72;
+        const maxUploadWidth = 640;
 
         function getReadableCameraError(err) {
             if (!err || !err.name) return 'Unknown camera error.';
@@ -486,7 +513,7 @@
                     } finally {
                         isUploading = false;
                     }
-                }, 100);
+                }, 180);
 
                 startBtn.textContent = 'Analysis Running';
                 cameraNote.textContent = 'Main feed now shows processed plant analysis output.';

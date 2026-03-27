@@ -9,8 +9,9 @@ app = Flask(__name__)
 
 # --- CONFIGURATION ---
 ENABLE_CLIENT_CAMERA = os.getenv("CLIENT_CAMERA", "true").lower() in ("1", "true", "yes")
-MAX_FRAME_WIDTH = int(os.getenv("MAX_FRAME_WIDTH", "960"))
-OUTPUT_JPEG_QUALITY = int(os.getenv("OUTPUT_JPEG_QUALITY", "90"))
+MAX_FRAME_WIDTH = int(os.getenv("MAX_FRAME_WIDTH", "640"))
+OUTPUT_JPEG_QUALITY = int(os.getenv("OUTPUT_JPEG_QUALITY", "75"))
+ENABLE_TENSOR_MESH = os.getenv("ENABLE_TENSOR_MESH", "false").lower() in ("1", "true", "yes")
 
 # Global storage for real-time stats
 # This allows the video loop to "talk" to the data stream
@@ -115,7 +116,8 @@ def create_leaf_mask(frame):
 
 def draw_symmetric_tensor_mesh(frame, bbox, leaf_mask, damage_ratio):
     x, y, w_bbox, h_bbox = bbox
-    density = max(10, min(w_bbox, h_bbox) // 15)
+    # Larger spacing reduces Delaunay complexity significantly on cloud CPUs.
+    density = max(24, min(w_bbox, h_bbox) // 8)
     cols = np.arange(x, x + w_bbox, density)
     rows = np.arange(y, y + h_bbox, density)
     points = []
@@ -186,7 +188,8 @@ def annotate_frame(frame):
         x, y, w_bbox, h_bbox = bbox
         box_color = (int(255 * damage_ratio), int(255 * (1 - damage_ratio)), 0)
         cv2.rectangle(frame, (x, y), (x + w_bbox, y + h_bbox), box_color, 2)
-        draw_symmetric_tensor_mesh(frame, bbox, leaf_mask, damage_ratio)
+        if ENABLE_TENSOR_MESH:
+            draw_symmetric_tensor_mesh(frame, bbox, leaf_mask, damage_ratio)
 
     return frame
 
