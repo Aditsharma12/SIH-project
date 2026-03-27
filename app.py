@@ -161,6 +161,7 @@ def upload_frame():
     with latest_user_frame_lock:
         latest_user_frame = frame
 
+    print(f"INFO: upload_frame accepted, frame shape={frame.shape}")
     return jsonify({'status': 'ok'})
 
 

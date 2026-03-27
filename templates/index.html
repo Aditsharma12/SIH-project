@@ -374,7 +374,9 @@
 
         const localVideo = document.createElement('video');
         localVideo.id = 'local-video';
-        localVideo.style.display = 'none';
+        localVideo.style.display = 'block';
+        localVideo.style.width = '100%';
+        localVideo.style.maxHeight = '400px';
         localVideo.autoplay = true;
         localVideo.muted = true;
         localVideo.playsInline = true;
@@ -388,6 +390,7 @@
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
                 localVideo.srcObject = stream;
+                console.log('Webcam stream started', stream);
 
                 localVideo.addEventListener('loadedmetadata', () => {
                     canvas.width = localVideo.videoWidth || 640;
@@ -397,13 +400,20 @@
                     streamInterval = setInterval(async () => {
                         const ctx = canvas.getContext('2d');
                         ctx.drawImage(localVideo, 0, 0, canvas.width, canvas.height);
-                        const dataURL = canvas.toDataURL('image/jpeg', 0.8);
+                        const dataURL = canvas.toDataURL('image/jpeg', 0.7);
 
-                        fetch('/api/upload_frame', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ image: dataURL })
-                        }).catch(err => console.warn('Upload error', err));
+                        try {
+                            const resp = await fetch('/api/upload_frame', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ image: dataURL })
+                            });
+                            if (!resp.ok) {
+                                console.warn('Upload frame failed', resp.status, await resp.text());
+                            }
+                        } catch (err) {
+                            console.warn('Upload error', err);
+                        }
                     }, 200);
                 });
 
@@ -411,7 +421,7 @@
                 startBtn.textContent = 'Webcam Streaming…';
             } catch (err) {
                 console.error('Webcam not available', err);
-                alert('Webcam not available or access denied.');
+                alert('Webcam not available or access denied. Please allow camera permissions and retry.');
             }
         }
 
