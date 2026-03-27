@@ -1,9 +1,11 @@
-from flask import Flask, render_template, Response
+from flask import Flask, render_template, Response, request, jsonify
 import cv2
 import numpy as np
 import time
 import json
 import os
+import base64
+from threading import Lock
 
 app = Flask(__name__)
 
@@ -11,6 +13,7 @@ app = Flask(__name__)
 CAMERA_INDEX = 0
 CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", str(CAMERA_INDEX))
 BACKEND = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
+ENABLE_CLIENT_CAMERA = os.getenv("CLIENT_CAMERA", "true").lower() in ("1", "true", "yes")
 
 # Global storage for real-time stats
 # This allows the video loop to "talk" to the data stream
@@ -20,6 +23,9 @@ global_stats = {
     "coverage": 0,
     "status": "Waiting for Plant..."
 }
+
+latest_user_frame = None
+latest_user_frame_lock = Lock()
 
 def create_leaf_mask(frame):
     h, w = frame.shape[:2]
@@ -91,8 +97,75 @@ def draw_symmetric_tensor_mesh(frame, bbox, leaf_mask, damage_ratio):
     for pt in points:
         cv2.circle(frame, pt, 2, (255, 255, 255), -1)
 
-def generate_frames():
+def annotate_frame(frame):
     global global_stats
+    h, w = frame.shape[:2]
+    leaf_mask, num_leaf_pixels, bbox = create_leaf_mask(frame)
+
+    if num_leaf_pixels == 0 or bbox is None:
+        global_stats["status"] = "No Plant Detected"
+        global_stats["health"] = 0
+        global_stats["damage"] = 0
+        global_stats["coverage"] = 0
+    else:
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lower_healthy = np.array([40, 50, 50])
+        upper_healthy = np.array([80, 255, 255])
+        healthy_mask = cv2.inRange(hsv, lower_healthy, upper_healthy) / 255
+
+        leaf_healthy = np.logical_and(leaf_mask, healthy_mask).astype(np.float32)
+        num_healthy = np.sum(leaf_healthy)
+
+        damage_percent = ((num_leaf_pixels - num_healthy) / num_leaf_pixels) * 100
+        health_percent = 100 - damage_percent
+        coverage_percent = (num_leaf_pixels / (h * w)) * 100
+
+        damage_ratio = min(damage_percent / 100, 1.0)
+
+        global_stats["status"] = "HEALTHY" if health_percent > 70 else ("MODERATE" if health_percent > 30 else "DAMAGED")
+        global_stats["health"] = round(health_percent, 1)
+        global_stats["damage"] = round(damage_percent, 1)
+        global_stats["coverage"] = round(coverage_percent, 1)
+
+        x, y, w_bbox, h_bbox = bbox
+        box_color = (int(255 * damage_ratio), int(255 * (1 - damage_ratio)), 0)
+        cv2.rectangle(frame, (x, y), (x + w_bbox, y + h_bbox), box_color, 2)
+        draw_symmetric_tensor_mesh(frame, bbox, leaf_mask, damage_ratio)
+
+    ret, buffer = cv2.imencode('.jpg', frame)
+    return buffer.tobytes()
+
+
+@app.route('/api/upload_frame', methods=['POST'])
+def upload_frame():
+    global latest_user_frame
+
+    data = request.get_json(force=True)
+    image_data = data.get('image') if isinstance(data, dict) else None
+
+    if not image_data:
+        return jsonify({'error': 'No image data'}), 400
+
+    if image_data.startswith('data:image'):
+        image_data = image_data.split(',', 1)[1]
+
+    try:
+        decoded = base64.b64decode(image_data)
+        np_arr = np.frombuffer(decoded, np.uint8)
+        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError('Unable to decode image')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+    with latest_user_frame_lock:
+        latest_user_frame = frame
+
+    return jsonify({'status': 'ok'})
+
+
+def generate_frames():
+    global global_stats, latest_user_frame
     use_camera = os.getenv("USE_CAMERA", "true").lower() in ("1", "true", "yes")
 
     camera = None
@@ -108,73 +181,48 @@ def generate_frames():
         time.sleep(1)
 
         if not camera.isOpened():
-            print("WARNING: Camera source could not open. Falling back to placeholder mode.")
+            print("WARNING: Camera source could not open. Falling back to alternative mode.")
             camera.release()
             camera = None
 
-    if camera is None:
-        # Render and local demo mode when no camera exists (e.g., cloud host)
-        global_stats["status"] = "NO_CAMERA"
-        global_stats["health"] = 0
-        global_stats["damage"] = 0
-        global_stats["coverage"] = 0
-
-        while True:
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            text = "No Camera: Render cloud mode"
-            cv2.putText(frame, text, (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame_bytes = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.1)
-        return
-
     while True:
-        success, frame = camera.read()
-        if not success:
-            break
+        if camera is not None:
+            success, frame = camera.read()
+            if not success:
+                break
+            frame = cv2.GaussianBlur(frame, (5, 5), 0)
+            frame_bytes = annotate_frame(frame)
+        elif ENABLE_CLIENT_CAMERA:
+            with latest_user_frame_lock:
+                frame = latest_user_frame.copy() if latest_user_frame is not None else None
 
-        frame = cv2.GaussianBlur(frame, (5, 5), 0)
-        h, w = frame.shape[:2]
-
-        # --- ANALYSIS LOGIC ---
-        leaf_mask, num_leaf_pixels, bbox = create_leaf_mask(frame)
-
-        if num_leaf_pixels == 0 or bbox is None:
-            global_stats["status"] = "No Plant Detected"
+            if frame is None:
+                global_stats["status"] = "WAITING"
+                global_stats["health"] = 0
+                global_stats["damage"] = 0
+                global_stats["coverage"] = 0
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(frame, "Awaiting browser camera...", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+                frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
+            else:
+                frame = cv2.GaussianBlur(frame, (5, 5), 0)
+                frame_bytes = annotate_frame(frame)
+        else:
+            global_stats["status"] = "NO_CAMERA"
             global_stats["health"] = 0
             global_stats["damage"] = 0
             global_stats["coverage"] = 0
-        else:
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            lower_healthy = np.array([40, 50, 50])
-            upper_healthy = np.array([80, 255, 255])
-            healthy_mask = cv2.inRange(hsv, lower_healthy, upper_healthy) / 255
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(frame, "No Camera: Render cloud mode", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
 
-            leaf_healthy = np.logical_and(leaf_mask, healthy_mask).astype(np.float32)
-            num_healthy = np.sum(leaf_healthy)
-
-            damage_percent = ((num_leaf_pixels - num_healthy) / num_leaf_pixels) * 100
-            health_percent = 100 - damage_percent
-            coverage_percent = (num_leaf_pixels / (h * w)) * 100
-
-            damage_ratio = min(damage_percent / 100, 1.0)
-
-            global_stats["status"] = "HEALTHY" if health_percent > 70 else ("MODERATE" if health_percent > 30 else "DAMAGED")
-            global_stats["health"] = round(health_percent, 1)
-            global_stats["damage"] = round(damage_percent, 1)
-            global_stats["coverage"] = round(coverage_percent, 1)
-
-            x, y, w_bbox, h_bbox = bbox
-            box_color = (int(255 * damage_ratio), int(255 * (1 - damage_ratio)), 0)
-            cv2.rectangle(frame, (x, y), (x + w_bbox, y + h_bbox), box_color, 2)
-            draw_symmetric_tensor_mesh(frame, bbox, leaf_mask, damage_ratio)
-
-        ret, buffer = cv2.imencode('.jpg', frame)
-        frame_bytes = buffer.tobytes()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+        time.sleep(0.05)
+
+    if camera is not None:
+        camera.release()
 
 def generate_data():
     """Stream JSON data to the client"""

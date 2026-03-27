@@ -334,8 +334,7 @@
 
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
-            
-            // Update Status Text & Color
+
             const statusElem = document.getElementById("status-text");
             statusElem.innerText = data.status;
 
@@ -344,7 +343,6 @@
             else if (data.status === "MODERATE") statusElem.style.color = "#ffb700";
             else statusElem.style.color = "#ffffff";
 
-            // Helper to update bars
             const updateMetric = (id, value) => {
                 document.getElementById(`val-${id}`).innerText = value + "%";
                 document.getElementById(`bar-${id}`).style.width = value + "%";
@@ -355,11 +353,69 @@
             updateMetric("coverage", data.coverage);
         };
 
-        // Handle Connection Errors
         eventSource.onerror = function() {
             document.querySelector('.connection-status').innerHTML = '<span style="color:#ff1744;">●</span> DISCONNECTED';
             document.querySelector('.connection-status').style.borderColor = '#ff1744';
         };
+
+        // Client camera upload for Render local browser capture
+        const startBtn = document.createElement('button');
+        startBtn.textContent = 'Start Webcam Mode';
+        startBtn.style.margin = '10px 20px';
+        startBtn.style.padding = '8px 14px';
+        startBtn.style.borderRadius = '6px';
+        startBtn.style.background = '#00f2ff';
+        startBtn.style.color = '#0d1020';
+        startBtn.style.border = 'none';
+        startBtn.style.cursor = 'pointer';
+
+        const videoCard = document.querySelector('.video-card');
+        videoCard.insertBefore(startBtn, videoCard.firstChild);
+
+        const localVideo = document.createElement('video');
+        localVideo.id = 'local-video';
+        localVideo.style.display = 'none';
+        localVideo.autoplay = true;
+        localVideo.muted = true;
+        localVideo.playsInline = true;
+        videoCard.appendChild(localVideo);
+
+        const canvas = document.createElement('canvas');
+
+        let streamInterval = null;
+
+        async function startLocalCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                localVideo.srcObject = stream;
+
+                localVideo.addEventListener('loadedmetadata', () => {
+                    canvas.width = localVideo.videoWidth || 640;
+                    canvas.height = localVideo.videoHeight || 480;
+
+                    if (streamInterval) clearInterval(streamInterval);
+                    streamInterval = setInterval(async () => {
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(localVideo, 0, 0, canvas.width, canvas.height);
+                        const dataURL = canvas.toDataURL('image/jpeg', 0.8);
+
+                        fetch('/api/upload_frame', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ image: dataURL })
+                        }).catch(err => console.warn('Upload error', err));
+                    }, 200);
+                });
+
+                startBtn.disabled = true;
+                startBtn.textContent = 'Webcam Streaming…';
+            } catch (err) {
+                console.error('Webcam not available', err);
+                alert('Webcam not available or access denied.');
+            }
+        }
+
+        startBtn.addEventListener('click', startLocalCamera);
     </script>
 </body>
 </html>
