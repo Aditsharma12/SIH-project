@@ -25,6 +25,7 @@ global_stats = {
 }
 
 latest_user_frame = None
+latest_user_frame_id = 0
 latest_user_frame_lock = Lock()
 
 def create_leaf_mask(frame):
@@ -138,7 +139,7 @@ def annotate_frame(frame):
 
 @app.route('/api/upload_frame', methods=['POST'])
 def upload_frame():
-    global latest_user_frame
+    global latest_user_frame, latest_user_frame_id, global_stats
 
     data = request.get_json(force=True)
     image_data = data.get('image') if isinstance(data, dict) else None
@@ -160,9 +161,10 @@ def upload_frame():
 
     with latest_user_frame_lock:
         latest_user_frame = frame
+        latest_user_frame_id += 1
 
     print(f"INFO: upload_frame accepted, frame shape={frame.shape}")
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'stats': global_stats})
 
 
 def generate_frames():
@@ -186,7 +188,7 @@ def generate_frames():
             camera.release()
             camera = None
 
-    last_processed_id = None
+    last_processed_id = -1
     last_frame_bytes = None
 
     while True:
@@ -199,6 +201,7 @@ def generate_frames():
         elif ENABLE_CLIENT_CAMERA:
             with latest_user_frame_lock:
                 current_frame_ref = latest_user_frame
+                current_id = latest_user_frame_id
 
             if current_frame_ref is None:
                 if last_frame_bytes is None:
@@ -211,11 +214,11 @@ def generate_frames():
                     last_frame_bytes = cv2.imencode('.jpg', frame)[1].tobytes()
                 frame_bytes = last_frame_bytes
             else:
-                if id(current_frame_ref) != last_processed_id:
+                if current_id != last_processed_id:
                     frame = current_frame_ref.copy()
                     frame = cv2.GaussianBlur(frame, (5, 5), 0)
                     last_frame_bytes = annotate_frame(frame)
-                    last_processed_id = id(current_frame_ref)
+                    last_processed_id = current_id
                 frame_bytes = last_frame_bytes
         else:
             global_stats["status"] = "NO_CAMERA"

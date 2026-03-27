@@ -329,12 +329,8 @@
     </div>
 
     <script>
-        // Connect to SSE Stream
-        const eventSource = new EventSource("/stats_feed");
-
-        eventSource.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-
+        function updateUIStatus(data) {
+            if (!data) return;
             const statusElem = document.getElementById("status-text");
             statusElem.innerText = data.status;
 
@@ -351,6 +347,13 @@
             updateMetric("health", data.health);
             updateMetric("damage", data.damage);
             updateMetric("coverage", data.coverage);
+        }
+
+        // Connect to SSE Stream
+        const eventSource = new EventSource("/stats_feed");
+
+        eventSource.onmessage = function(event) {
+            updateUIStatus(JSON.parse(event.data));
         };
 
         eventSource.onerror = function() {
@@ -410,6 +413,11 @@
                             });
                             if (!resp.ok) {
                                 console.warn('Upload frame failed', resp.status, await resp.text());
+                            } else {
+                                const json = await resp.json();
+                                if (json.stats) {
+                                    updateUIStatus(json.stats);
+                                }
                             }
                         } catch (err) {
                             console.warn('Upload error', err);
