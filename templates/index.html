@@ -399,11 +399,16 @@
                     canvas.width = localVideo.videoWidth || 640;
                     canvas.height = localVideo.videoHeight || 480;
 
+                    let isUploading = false;
+                    
                     if (streamInterval) clearInterval(streamInterval);
                     streamInterval = setInterval(async () => {
+                        if (isUploading) return;
+                        isUploading = true;
+
                         const ctx = canvas.getContext('2d');
                         ctx.drawImage(localVideo, 0, 0, canvas.width, canvas.height);
-                        const dataURL = canvas.toDataURL('image/jpeg', 0.7);
+                        const dataURL = canvas.toDataURL('image/jpeg', 0.6);
 
                         try {
                             const resp = await fetch('/api/upload_frame', {
@@ -412,17 +417,19 @@
                                 body: JSON.stringify({ image: dataURL })
                             });
                             if (!resp.ok) {
-                                console.warn('Upload frame failed', resp.status, await resp.text());
+                                console.warn('Upload frame failed', resp.status);
                             } else {
                                 const json = await resp.json();
-                                if (json.stats) {
+                                if (json && json.stats) {
                                     updateUIStatus(json.stats);
                                 }
                             }
                         } catch (err) {
                             console.warn('Upload error', err);
+                        } finally {
+                            isUploading = false;
                         }
-                    }, 200);
+                    }, 100);
                 });
 
                 startBtn.disabled = true;
