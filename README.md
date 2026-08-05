@@ -84,4 +84,4 @@ Deployment config is in `render.yaml`.
 
 - This project is currently heuristic/computer-vision based (not a trained ML model).
 - Detection quality depends on lighting, camera quality, and how visible green leaf pixels are.
-- If a real plant is not visible, status will likely stay `No Plant Detected`.
+- If a real plant is not visible, status will likely stay `No Plant Detected `.
